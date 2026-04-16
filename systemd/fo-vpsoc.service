@@ -1,0 +1,15 @@
+[Unit]
+Description=Foundation VPSOC Dark Sentinel
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/node /usr/local/lib/fo-sys/vpsoc-sentinel.js
+WorkingDirectory=/usr/local/lib/fo-sys
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fo-vpsoc
+Restart=on-failure
+RestartSec=30
+EnvironmentFile=-/etc/fo-sys/env

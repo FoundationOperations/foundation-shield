@@ -3,6 +3,24 @@
 // Critical/high events push immediately to FOMCP. All events go to local append-only log.
 // Critical/high Telegram messages are narrated by Sonnet via OpenRouter for personality.
 'use strict';
+
+// Self-hash verification — abort if tampered (fires process.exit(2) on mismatch)
+(function verifySelf() {
+  const selfPath = __filename;
+  const hashFile = '/etc/fo-sys/script-hashes.json';
+  const scriptName = require('path').basename(selfPath);
+  try {
+    const { createHash } = require('crypto');
+    const stored = JSON.parse(require('fs').readFileSync(hashFile, 'utf8'));
+    if (!stored[scriptName]) return; // not yet hashed — skip (pre-harden state)
+    const current = createHash('sha256').update(require('fs').readFileSync(selfPath)).digest('hex');
+    if (current !== stored[scriptName]) {
+      process.stderr.write(`[SHIELD] TAMPER DETECTED: ${scriptName} hash mismatch!\n`);
+      process.exit(2);
+    }
+  } catch (_) { /* hash file missing or unreadable — skip verification */ }
+})();
+
 const https = require('https');
 const http  = require('http');
 const fs    = require('fs');
