@@ -1,6 +1,7 @@
 // /opt/foundation-shield/scripts/alerting.js
 // Drop-in replacement for ops-docs alerting.js with FOMCP push + local log fallback.
 // Critical/high events push immediately to FOMCP. All events go to local append-only log.
+// Critical/high Telegram messages are narrated by Sonnet via OpenRouter for personality.
 'use strict';
 const https = require('https');
 const http  = require('http');
@@ -34,9 +35,11 @@ function loadVault() {
 }
 
 const _vault = loadVault();
-const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || _vault.TELEGRAM_BOT_TOKEN || _vault.FOUNDATION_SHIELD_BOT_TOKEN;
-const TELEGRAM_CHAT  = process.env.TELEGRAM_CHAT_ID   || _vault.TELEGRAM_CHAT_ID   || _vault.FOUNDATION_SHIELD_CHAT_ID;
-const FOMCP_TOKEN    = process.env.FOMCP_TOKEN         || _vault.FOMCP_TOKEN        || _vault.MCP_API_TOKEN;
+const TELEGRAM_TOKEN    = process.env.TELEGRAM_BOT_TOKEN  || _vault.TELEGRAM_BOT_TOKEN  || _vault.FOUNDATION_SHIELD_BOT_TOKEN;
+const TELEGRAM_CHAT     = process.env.TELEGRAM_CHAT_ID    || _vault.TELEGRAM_CHAT_ID    || _vault.FOUNDATION_SHIELD_CHAT_ID;
+const FOMCP_TOKEN       = process.env.FOMCP_TOKEN          || _vault.FOMCP_TOKEN         || _vault.MCP_API_TOKEN        || _vault.MCP_ADMIN_TOKEN;
+const OPENROUTER_KEY    = process.env.OPENROUTER_API_KEY   || _vault.OPENROUTER_API_KEY;
+const NARRATE_MODEL     = 'anthropic/claude-haiku-4-5'; // fast + cheap for alert narration
 
 const DRY_RUN = process.argv.includes('--dry-run');
 
@@ -124,6 +127,64 @@ function sendTelegram(message) {
   });
 }
 
+// ── AI Narration ──────────────────────────────────────────────────────────────
+const NARRATE_SYSTEM = `You are FoundationShield — a battle-hardened ops sentinel watching over Joey's fleet (Foundation Operations LLC, VRO, Mac Daddy). You have the dry wit of a senior SRE who has seen everything catch fire at 3 AM and learned to find it funny.
+
+When something actually matters, you say so clearly. When it's stupid, you call it stupid. You never sugarcoat severity, but you don't panic either.
+
+VOICE: Dry, direct, occasionally sardonic. Like that senior eng who responds to incidents with "ah yes, classic" before fixing it in 20 minutes.
+
+RULES:
+- Keep the core alert information intact — don't omit the actual problem
+- Add one sharp observation or framing that puts it in context
+- Telegram Markdown: *bold* with asterisks, _italic_ with underscores. No other formatting.
+- Max 3 sentences of narration. Don't pad it.
+- Don't sign off with "FoundationShield" — that header is added separately
+- If severity is critical: match the urgency. Dry ≠ casual about real fires.
+- If severity is high: a raised eyebrow, not a shrug`;
+
+async function narrateAlert(severity, key, message, server) {
+  if (!OPENROUTER_KEY) return null;
+  const body = JSON.stringify({
+    model: NARRATE_MODEL,
+    max_tokens: 300,
+    temperature: 0.7,
+    messages: [
+      { role: 'system', content: NARRATE_SYSTEM },
+      { role: 'user', content: `Narrate this ${severity} alert from ${server} in your voice. Keep all technical facts. Add your take.\n\nAlert key: ${key}\n\nRaw message:\n${message}` }
+    ]
+  });
+
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'openrouter.ai',
+      path: '/api/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENROUTER_KEY}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+        'HTTP-Referer': 'https://foundationoperations.com',
+        'X-Title': 'FoundationShield Alerting'
+      }
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(data);
+          const text = j.choices?.[0]?.message?.content?.trim();
+          resolve(text || null);
+        } catch { resolve(null); }
+      });
+    });
+    req.setTimeout(8000, () => { req.destroy(); resolve(null); });
+    req.on('error', () => resolve(null));
+    req.write(body);
+    req.end();
+  });
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /** deriveSeverity: best-effort severity from key prefix if not specified */
@@ -166,7 +227,17 @@ async function alert(key, message, opts = {}) {
   // Telegram: critical + high get immediate Telegram; others are harvest-only
   if (['critical', 'high'].includes(severity) && !inCooldown(key)) {
     try {
-      await sendTelegram(`🚨 *FoundationShield Alert*\n*Server:* ${SERVER_NAME}\n\n${message}`);
+      const icon   = severity === 'critical' ? '🚨' : '⚠️';
+      const label  = severity === 'critical' ? '*CRITICAL*' : '*HIGH*';
+      let tgBody   = message;
+
+      // Attempt AI narration — fall back to raw message if it fails or key absent
+      if (OPENROUTER_KEY) {
+        const narrated = await narrateAlert(severity, key, message, SERVER_NAME);
+        if (narrated) tgBody = narrated;
+      }
+
+      await sendTelegram(`${icon} *FoundationShield* ${label}\n*Server:* ${SERVER_NAME}\n\n${tgBody}`);
     } catch (_) {} // never throw — alerting must not crash governance scripts
     setCooldown(key);
   }
