@@ -53,8 +53,8 @@ function loadVault() {
 }
 
 const _vault = loadVault();
-const TELEGRAM_TOKEN    = process.env.TELEGRAM_BOT_TOKEN  || _vault.TELEGRAM_BOT_TOKEN  || _vault.FOUNDATION_SHIELD_BOT_TOKEN;
-const TELEGRAM_CHAT     = process.env.TELEGRAM_CHAT_ID    || _vault.TELEGRAM_CHAT_ID    || _vault.FOUNDATION_SHIELD_CHAT_ID;
+const TELEGRAM_TOKEN    = process.env.FOUNDATION_SHIELD_BOT_TOKEN || _vault.FOUNDATION_SHIELD_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || _vault.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT     = process.env.FOUNDATION_SHIELD_CHAT_ID   || _vault.FOUNDATION_SHIELD_CHAT_ID   || process.env.TELEGRAM_CHAT_ID  || _vault.TELEGRAM_CHAT_ID;
 const FOMCP_TOKEN       = process.env.FOMCP_TOKEN          || _vault.FOMCP_TOKEN         || _vault.MCP_API_TOKEN        || _vault.MCP_ADMIN_TOKEN;
 const OPENROUTER_KEY    = process.env.OPENROUTER_API_KEY   || _vault.OPENROUTER_API_KEY;
 const NARRATE_MODEL     = 'anthropic/claude-haiku-4-5'; // fast + cheap for alert narration
