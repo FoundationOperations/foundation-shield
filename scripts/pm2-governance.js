@@ -18,6 +18,15 @@ const PLAYBOOKS = {
   pm2_dead:     'pm2 logs <name> --lines 50 --nostream — fix error then pm2 restart <name>'
 };
 
+// Orphan allowlist — cmd substrings that are expected unmanaged node processes
+// (Claude CLI child processes, MCP stdio servers, etc.)
+const ORPHAN_CMD_ALLOWLIST = [
+  'playwright-mcp',       // Claude CLI's playwright MCP server (stdio, managed by Claude)
+  '@anthropic-ai',        // Any Anthropic CLI tooling
+  'claude-code',          // Claude Code internals
+  'npx/@playwright',      // npx-spawned playwright
+];
+
 function run(cmd) {
   try { return execSync(cmd, { encoding: 'utf8', timeout: 10000 }).trim(); } catch { return ''; }
 }
@@ -151,6 +160,7 @@ async function checkUnregisteredListeners(listeners, registryPorts) {
 async function checkOrphanedNodeProcesses(allPm2Pids, dockerPids, pm2DaemonPids) {
   for (const { pid, cmd, uptimeSecs } of getNodePids()) {
     if (uptimeSecs < 120 || allPm2Pids.has(pid) || dockerPids.has(pid) || pm2DaemonPids.has(pid)) continue;
+    if (ORPHAN_CMD_ALLOWLIST.some(pattern => cmd.includes(pattern))) continue;
     const cmdHash = crypto.createHash('md5').update(cmd).digest('hex').slice(0, 8);
     await alert(`orphan_${cmdHash}`,
       `🧟 *Orphaned node process*\nPID: ${pid} | Uptime: ${Math.round(uptimeSecs / 60)}m\nCmd: \`${cmd.slice(0, 120)}\`\nNot tracked by root or nodeapp PM2.`,
