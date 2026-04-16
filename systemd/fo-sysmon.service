@@ -1,0 +1,14 @@
+[Unit]
+Description=Foundation System Monitor
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/node /usr/local/lib/fo-sys/pm2-governance.js
+WorkingDirectory=/usr/local/lib/fo-sys
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fo-sysmon
+Restart=no
+EnvironmentFile=-/etc/fo-sys/env
