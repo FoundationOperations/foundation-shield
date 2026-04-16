@@ -79,9 +79,10 @@ function pushToFomcp(event) {
   return new Promise((resolve) => {
     if (!FOMCP_TOKEN) return resolve(false);
     const body = JSON.stringify(event);
+    const parsed = new URL(FOMCP_URL);
     const options = {
-      hostname: '127.0.0.1',
-      port: 4500,
+      hostname: parsed.hostname,
+      port: parseInt(parsed.port, 10) || (parsed.protocol === 'https:' ? 443 : 80),
       path: '/api/governance/events',
       method: 'POST',
       headers: {
@@ -90,9 +91,9 @@ function pushToFomcp(event) {
         'Authorization': `Bearer ${FOMCP_TOKEN}`
       }
     };
-    const req = http.request(options, (res) => {
-      let data = '';
-      res.on('data', d => data += d);
+    const transport = parsed.protocol === 'https:' ? https : http;
+    const req = transport.request(options, (res) => {
+      res.resume();
       res.on('end', () => resolve(res.statusCode === 200));
     });
     req.setTimeout(5000, () => { req.destroy(); resolve(false); });
@@ -164,13 +165,15 @@ async function alert(key, message, opts = {}) {
 
   // Telegram: critical + high get immediate Telegram; others are harvest-only
   if (['critical', 'high'].includes(severity) && !inCooldown(key)) {
-    await sendTelegram(`🚨 *FoundationShield Alert*\n*Server:* ${SERVER_NAME}\n\n${message}`);
+    try {
+      await sendTelegram(`🚨 *FoundationShield Alert*\n*Server:* ${SERVER_NAME}\n\n${message}`);
+    } catch (_) {} // never throw — alerting must not crash governance scripts
     setCooldown(key);
   }
 }
 
 /** Log an informational event (no Telegram). Always goes to digest + FOMCP. */
-async function info(message, opts = {}) {
+function info(message, opts = {}) {
   appendDigest('INFO', opts.key || 'info', message, opts);
   if (!DRY_RUN && opts.key) {
     pushToFomcp({
