@@ -1,0 +1,14 @@
+[Unit]
+Description=Foundation Security Monitor
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/node /usr/local/lib/fo-sys/security-guard.js
+WorkingDirectory=/usr/local/lib/fo-sys
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fo-secmon
+Restart=no
+EnvironmentFile=-/etc/fo-sys/env
