@@ -331,9 +331,13 @@ async function checkThreatIntel() {
 // ── Check 44: NTP clock drift ──
 async function checkNtpDrift() {
   try {
-    const out = run('timedatectl show --property=NTPSynchronized,TimeUSec 2>/dev/null');
-    const synced = out.includes('NTPSynchronized=yes');
+    // `timedatectl show --property=X,Y` returns empty under systemd timer / non-interactive
+    // shells on some Ubuntu versions. `-p KEY --value` is the robust form.
+    const synced = run('timedatectl show -p NTPSynchronized --value 2>/dev/null') === 'yes';
     if (!synced) {
+      // Fallback parse in case the show form is unavailable at all
+      const human = run('timedatectl 2>/dev/null');
+      if (/System clock synchronized:\s*yes/i.test(human)) return;
       await alert('ntp_unsynchronized',
         `🕐 *NTP not synchronized*\nSystem clock may be drifting — this affects log correlation and JWT validity.\nFix: \`timedatectl set-ntp true\``,
         { check_type: 'ntp_drift', severity: 'high', playbook: 'timedatectl set-ntp true && systemctl restart systemd-timesyncd' }

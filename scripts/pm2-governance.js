@@ -192,7 +192,14 @@ async function main() {
   const allPm2Pids    = new Set([...collectPm2Pids(rootApps), ...collectPm2Pids(nodeappApps)]);
   const dockerPids    = getDockerPids();
   const pm2DaemonPids = getPm2DaemonPids();
+  // Registry ∪ infra ports ∪ any port currently owned by a PM2 app (either daemon).
+  // Infra ports don't appear in /home/nodeapp/port-registry.js but are legitimate.
+  // PM2-owned ports are already accounted for elsewhere — no need to re-flag them here.
   const registryPorts = new Set(Object.values(REGISTRY));
+  registryPorts.add(4500); // FOMCP
+  registryPorts.add(9090); // deploy webhook
+  for (const port of rootPortMap.keys())    registryPorts.add(port);
+  for (const port of nodeappPortMap.keys()) registryPorts.add(port);
 
   await checkDualDaemonCollision(rootPortMap, nodeappPortMap);
   await checkPortSquatters(rootPortMap, nodeappPortMap, listeners, allPm2Pids, pm2DaemonPids);

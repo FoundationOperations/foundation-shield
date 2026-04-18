@@ -223,6 +223,7 @@ async function alert(key, message, opts = {}) {
   const severity   = opts.severity   || deriveSeverity(key);
   const check_type = opts.check_type || key.split('_')[0];
 
+  // Digest log is always written (append-only forensic record, never deduped)
   appendDigest('ALERT', key, message, { severity, check_type });
 
   if (DRY_RUN) {
@@ -230,7 +231,12 @@ async function alert(key, message, opts = {}) {
     return;
   }
 
-  // Push to FOMCP (all severities — non-blocking, fire-and-forget)
+  // Cooldown gate: same key within COOLDOWN_SECS → suppress FOMCP push AND Telegram.
+  // Previous behavior only gated Telegram, causing FOMCP events DB to accumulate
+  // thousands of duplicate rows per unresolved issue. Digest log still captures everything.
+  if (inCooldown(key)) return;
+
+  // Push to FOMCP (non-blocking, fire-and-forget)
   pushToFomcp({
     server:     SERVER_NAME,
     check_type,
@@ -242,8 +248,8 @@ async function alert(key, message, opts = {}) {
     source:     'push'
   }).catch(() => {}); // never throw — alerting must not crash governance scripts
 
-  // Telegram: critical + high get immediate Telegram; others are harvest-only
-  if (['critical', 'high'].includes(severity) && !inCooldown(key)) {
+  // Telegram: critical + high get immediate Telegram; others are FOMCP-only
+  if (['critical', 'high'].includes(severity)) {
     try {
       const icon   = severity === 'critical' ? '🚨' : '⚠️';
       const label  = severity === 'critical' ? '*CRITICAL*' : '*HIGH*';
@@ -257,8 +263,9 @@ async function alert(key, message, opts = {}) {
 
       await sendTelegram(`${icon} *FoundationShield* ${label}\n*Server:* ${SERVER_NAME}\n\n${tgBody}`);
     } catch (_) {} // never throw — alerting must not crash governance scripts
-    setCooldown(key);
   }
+
+  setCooldown(key);
 }
 
 /** Log an informational event (no Telegram). Always goes to digest + FOMCP. */

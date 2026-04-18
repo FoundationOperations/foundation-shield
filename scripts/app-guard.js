@@ -95,17 +95,22 @@ async function checkPm2Memory() {
   } catch (_) {}
 }
 
-// Check 22: PM2 restart storm (>5 restarts in 5min)
+// Check 22: PM2 restart storm — use unstable_restarts (recent crash counter that
+// PM2 resets once an app stays up). Previously used cumulative restart_time which
+// meant any app with >5 lifetime restarts would flag on every normal restart.
 async function checkRestartStorm() {
   try {
     const apps = JSON.parse(execSync('pm2 jlist', { encoding: 'utf8', timeout: 10000 }));
     for (const app of apps) {
-      const restarts = app.pm2_env?.restart_time || 0;
-      const uptimeMs = app.pm2_env?.pm_uptime || Date.now();
+      const unstable   = app.pm2_env?.unstable_restarts || 0;
+      const uptimeMs   = app.pm2_env?.pm_uptime || Date.now();
       const uptimeSecs = (Date.now() - uptimeMs) / 1000;
-      if (restarts > 5 && uptimeSecs < 300) {
+      // Only alert if PM2 is actively crash-looping this app (unstable > 5) AND
+      // current uptime is under 5 min (i.e. still in the storm, not recovered).
+      if (unstable > 5 && uptimeSecs < 300) {
+        const totalRestarts = app.pm2_env?.restart_time || 0;
         await alert(`restart_storm_${app.name}`,
-          `🔄 *PM2 restart storm*: ${app.name}\nRestarts: ${restarts} | Uptime: ${Math.round(uptimeSecs)}s\nFix: \`pm2 logs ${app.name} --lines 50\``,
+          `🔄 *PM2 restart storm*: ${app.name}\nUnstable restarts: ${unstable} | Uptime: ${Math.round(uptimeSecs)}s | Lifetime restarts: ${totalRestarts}\nFix: \`pm2 logs ${app.name} --lines 50\``,
           { check_type: 'restart_storm', severity: 'critical', playbook: `pm2 logs ${app.name} --lines 50 --nostream` });
       }
     }
@@ -149,22 +154,11 @@ async function checkFdExhaustion() {
   } catch (_) {}
 }
 
-// Check 25: Unexpected egress (listeners outside port registry)
-async function checkEgress() {
-  const REGISTRY = require('/home/nodeapp/port-registry.js');
-  const registryPorts = new Set(Object.values(REGISTRY));
-  registryPorts.add(4500); // FOMCP
-  registryPorts.add(9090); // deploy webhook
-  const lines = run('ss -tlnp').split('\n');
-  for (const line of lines) {
-    const m = line.match(/:(\d+)\s+[\d*:]+\s+users:\(\("([^"]+)",pid=(\d+)/);
-    if (!m) continue;
-    const port = parseInt(m[1]);
-    if (port < 3000 || port > 9100 || registryPorts.has(port)) continue;
-    await alert(`egress_${port}`, `🌐 *Unexpected listener on port ${port}*\nProcess: \`${m[2]}\` (pid ${m[3]})\nInvestigate: \`lsof -i :${port}\``,
-      { check_type: 'unexpected_egress', severity: 'high', playbook: `lsof -i :${port} — identify and kill if unauthorized` });
-  }
-}
+// Check 25: Unexpected egress — REMOVED (duplicate of pm2-governance.js checkUnregisteredListeners).
+// Both read ss -tlnp against the same /home/nodeapp/port-registry.js and fired
+// independently for every finding, doubling the event volume. pm2-governance.js
+// owns this check now. Intentionally kept as no-op stub for signature parity.
+async function checkEgress() { /* superseded by pm2-governance.js checkUnregisteredListeners */ }
 
 // Check 26: Endpoint probing
 function probe(url) {
@@ -220,6 +214,10 @@ async function checkDeployFingerprint() {
     { path: '/var/www/mac-daddy-portal-stage', builtFile: 'public/app.js',    label: 'mac-daddy-stage' },
   ];
   for (const app of apps) {
+    // Skip silently if the app isn't deployed on this server — prevents every 5min
+    // scan from flagging "stage" on servers that only host prod, etc.
+    if (!fs.existsSync(app.path)) continue;
+    if (!fs.existsSync(`${app.path}/${app.builtFile}`)) continue;
     try {
       const gitHash    = run(`git -C ${app.path} rev-parse --short HEAD 2>/dev/null`);
       const builtMtime = fs.statSync(`${app.path}/${app.builtFile}`).mtimeMs;
@@ -237,6 +235,8 @@ async function checkDeployFingerprint() {
 async function checkNginx5xx() {
   try {
     const logFile = '/var/log/nginx/access.log';
+    // Skip silently if nginx isn't logging here — not every server runs nginx.
+    if (!fs.existsSync(logFile)) return;
     const count = run(`awk -v d="$(date -d '5 minutes ago' '+%d/%b/%Y:%H:%M')" '$0 ~ d && $9 ~ /^5/' ${logFile} 2>/dev/null | wc -l`);
     const n = parseInt(count) || 0;
     if (n >= 10) {
